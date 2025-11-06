@@ -1,10 +1,14 @@
-// src/app/(admin)/laporan/page.tsx
+// src/app/(admin)/laporan-admin/page.tsx
 "use client";
 
-import { useMemo, useState } from "react";
+// 1. Import 'useEffect' untuk mengambil data
+import { useMemo, useState, useEffect } from "react";
 import Link from "next/link";
-import { LAPORAN, USERS } from "@/lib/mock";
-import type { Laporan as TLaporan, ReviewStatus, Bidang } from "@/lib/types";
+
+// 2. Import Tipe data asli dari Prisma
+import type { Laporan, User, ReviewStatus, Bidang } from "@/generated/prisma";
+
+// 3. Import semua komponen UI
 import {
   Card,
   CardContent,
@@ -41,16 +45,15 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/emptyState";
 
+// (Semua fungsi helper Anda seperti fmtDate, atStartOfDay, dll, tetap sama)
 type RangeOpt = "SEMUA" | "HARI_INI" | "7_HARI" | "30_HARI" | "CUSTOM";
 type SortKey = "tanggal" | "bidang" | "status" | "id";
 type SortDir = "asc" | "desc";
-
 const STATUS_ORDER: Record<ReviewStatus, number> = {
   PENDING: 0,
   DITERIMA: 1,
   DITOLAK: 2,
 };
-
 const tz = "Asia/Jakarta";
 function fmtDate(iso: string) {
   const d = new Date(iso);
@@ -80,18 +83,34 @@ const mapsHref = (location?: string | null) =>
   !location
     ? undefined
     : isMapsUrl(location)
-    ? location
-    : location.startsWith("geo:")
-    ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
-        location.replace(/^geo:/i, "")
-      )}`
-    : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
-        location
-      )}`;
+      ? location
+      : location.startsWith("geo:")
+        ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
+          location.replace(/^geo:/i, "")
+        )}`
+        : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
+          location
+        )}`;
+// --- Akhir fungsi helper ---
+
+// Tipe data baru yang lebih kaya (Laporan + data Pelapor)
+type LaporanWithPelapor = Laporan & {
+  pelaporUser: {
+    id: string;
+    nama: string;
+    petugasId: string;
+  } | null;
+};
 
 export default function AdminLaporan() {
-  const [reports, setReports] = useState<TLaporan[]>(LAPORAN);
+  // Ganti 'LAPORAN' dengan array kosong
+  const [reports, setReports] = useState<LaporanWithPelapor[]>([]);
 
+  // Tambahkan state loading & error
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  // State untuk filter
   const [bidang, setBidang] = useState<"ALL" | Bidang>("ALL");
   const [status, setStatus] = useState<"ALL" | ReviewStatus>("ALL");
   const [q, setQ] = useState("");
@@ -101,6 +120,30 @@ export default function AdminLaporan() {
   const [sortKey, setSortKey] = useState<SortKey>("tanggal");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
 
+  // Fungsi untuk mengambil data dari API
+  const fetchLaporan = async () => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      const response = await fetch("/api/getalllaporan");
+      if (!response.ok) {
+        throw new Error("Gagal mengambil data laporan");
+      }
+      const data = await response.json();
+      setReports(data);
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Panggil fetchLaporan() saat halaman dimuat
+  useEffect(() => {
+    fetchLaporan();
+  }, []); // Array dependensi kosong berarti ini hanya jalan sekali
+
+  // useMemo untuk { startBound, endBound }
   const { startBound, endBound } = useMemo(() => {
     const now = new Date();
     const today0 = atStartOfDay(now);
@@ -139,6 +182,7 @@ export default function AdminLaporan() {
     return { startBound: undefined, endBound: undefined };
   }, [range, startDate, endDate]);
 
+  // useMemo untuk 'data' (filter & sort)
   const data = useMemo(() => {
     const base = reports
       .filter((l) => (bidang === "ALL" ? true : l.bidang === bidang))
@@ -161,7 +205,6 @@ export default function AdminLaporan() {
     const sorted = [...base].sort((a, b) => {
       let av: number | string = 0;
       let bv: number | string = 0;
-
       switch (sortKey) {
         case "tanggal":
           av = +new Date(a.createdAt);
@@ -180,7 +223,6 @@ export default function AdminLaporan() {
           bv = b.id;
           break;
       }
-
       if (typeof av === "number" && typeof bv === "number") {
         return sortDir === "asc" ? av - bv : bv - av;
       }
@@ -196,52 +238,94 @@ export default function AdminLaporan() {
     s === "PENDING"
       ? "secondary"
       : s === "DITERIMA"
-      ? "default"
-      : "destructive";
+        ? "default"
+        : "destructive";
 
+  // State untuk dialog
   const [approveId, setApproveId] = useState<string | null>(null);
   const [rejectId, setRejectId] = useState<string | null>(null);
   const [note, setNote] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const doApprove = () => {
+  // Fungsi 'doApprove'
+  const doApprove = async () => {
     if (!approveId) return;
-    const now = new Date().toISOString();
-    setReports((prev) =>
-      prev.map((r) =>
-        r.id === approveId
-          ? {
-              ...r,
-              statusReview: "DITERIMA",
-              reviewedAt: now,
-              reviewNote: note || null,
-            }
-          : r
-      )
-    );
-    setApproveId(null);
-    setNote("");
-  };
-  const doReject = () => {
-    if (!rejectId) return;
-    const now = new Date().toISOString();
-    setReports((prev) =>
-      prev.map((r) =>
-        r.id === rejectId
-          ? {
-              ...r,
-              statusReview: "DITOLAK",
-              reviewedAt: now,
-              reviewNote: note || null,
-            }
-          : r
-      )
-    );
-    setRejectId(null);
-    setNote("");
+    setIsSubmitting(true);
+    try {
+      const response = await fetch(`/api/laporan/${approveId}/review`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          status: 'DITERIMA',
+          reviewNote: note,
+        }),
+      });
+      if (!response.ok) {
+        throw new Error('Gagal menyetujui laporan');
+      }
+      setApproveId(null);
+      setNote("");
+      await fetchLaporan(); // Muat ulang data
+    } catch (err: any) {
+      alert(`Error: ${err.message}`);
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
+  // Fungsi 'doReject'
+  const doReject = async () => {
+    if (!rejectId) return;
+    if (!note.trim()) {
+      alert("Catatan penolakan wajib diisi.");
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+      const response = await fetch(`/api/laporan/${rejectId}/review`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          status: 'DITOLAK',
+          reviewNote: note,
+        }),
+      });
+      if (!response.ok) {
+        throw new Error('Gagal menolak laporan');
+      }
+      setRejectId(null);
+      setNote("");
+      await fetchLaporan(); // Muat ulang data
+    } catch (err: any) {
+      alert(`Error: ${err.message}`);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  // Handler Loading dan Error
+  if (isLoading) {
+    return (
+      <div className="p-6 text-center">
+        <p>Mengambil data laporan...</p>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="p-6 text-center text-red-600">
+        <p>Error: {error}</p>
+        <Button onClick={fetchLaporan} className="mt-4">Coba Lagi</Button>
+      </div>
+    );
+  }
+
+  // JSX return
   return (
     <div className="grid gap-6">
+      {/* Filter Card */}
       <Card>
         <CardHeader>
           <CardTitle>Review Laporan</CardTitle>
@@ -281,7 +365,9 @@ export default function AdminLaporan() {
             <SelectContent>
               <SelectItem value="SEMUA">Semua</SelectItem>
               <SelectItem value="HARI_INI">Hari ini</SelectItem>
+              {/* --- INI ADALAH PERBAIKANNYA --- */}
               <SelectItem value="7_HARI">7 hari</SelectItem>
+              {/* --- -------------------- --- */}
               <SelectItem value="30_HARI">30 hari</SelectItem>
               <SelectItem value="CUSTOM">Custom…</SelectItem>
             </SelectContent>
@@ -364,6 +450,7 @@ export default function AdminLaporan() {
         </CardContent>
       </Card>
 
+      {/* Tabel Data Card */}
       <Card>
         <CardHeader className="flex-row items-center justify-between">
           <CardTitle>Daftar Laporan</CardTitle>
@@ -393,15 +480,15 @@ export default function AdminLaporan() {
               </TableHeader>
               <TableBody>
                 {data.map((l) => {
-                  const pelapor =
-                    USERS.find((u) => u.id === l.pelaporUserId)?.nama ||
-                    l.pelaporUserId;
+                  const pelapor = l.pelaporUser
+                    ? l.pelaporUser.nama
+                    : `(ID: ${l.pelaporUserId.substring(0, 5)}...)`;
                   const href = mapsHref(l.location);
                   return (
                     <TableRow key={l.id}>
-                      <TableCell>{fmtDate(l.createdAt)}</TableCell>
+                      <TableCell>{fmtDate(l.createdAt as any)}</TableCell>
                       <TableCell className="font-mono text-xs">
-                        {l.id}
+                        {l.id.split("-")[0]}...
                       </TableCell>
                       <TableCell className="max-w-[260px] truncate">
                         {l.judul}
@@ -436,6 +523,7 @@ export default function AdminLaporan() {
                           </Button>
                         </Link>
 
+                        {/* Dialog Approve */}
                         <Dialog
                           open={approveId === l.id}
                           onOpenChange={(v) => !v && setApproveId(null)}
@@ -444,6 +532,7 @@ export default function AdminLaporan() {
                             <Button
                               variant="default"
                               className="rounded-xl"
+                              disabled={l.statusReview !== 'PENDING' || isSubmitting}
                               onClick={() => {
                                 setApproveId(l.id);
                                 setNote(l.reviewNote || "");
@@ -464,19 +553,22 @@ export default function AdminLaporan() {
                                 placeholder="Catatan (opsional)"
                                 value={note}
                                 onChange={(e) => setNote(e.target.value)}
+                                disabled={isSubmitting}
                               />
                             </div>
                             <DialogFooter>
                               <Button
                                 onClick={doApprove}
                                 className="rounded-xl"
+                                disabled={isSubmitting}
                               >
-                                Simpan
+                                {isSubmitting ? 'Menyimpan...' : 'Simpan'}
                               </Button>
                             </DialogFooter>
                           </DialogContent>
                         </Dialog>
 
+                        {/* Dialog Tolak */}
                         <Dialog
                           open={rejectId === l.id}
                           onOpenChange={(v) => !v && setRejectId(null)}
@@ -485,6 +577,7 @@ export default function AdminLaporan() {
                             <Button
                               variant="destructive"
                               className="rounded-xl"
+                              disabled={l.statusReview !== 'PENDING' || isSubmitting}
                               onClick={() => {
                                 setRejectId(l.id);
                                 setNote(l.reviewNote || "");
@@ -502,14 +595,19 @@ export default function AdminLaporan() {
                                 {l.judul}
                               </div>
                               <Textarea
-                                placeholder="Alasan penolakan"
+                                placeholder="Alasan penolakan (wajib)"
                                 value={note}
                                 onChange={(e) => setNote(e.target.value)}
+                                disabled={isSubmitting}
                               />
                             </div>
                             <DialogFooter>
-                              <Button onClick={doReject} className="rounded-xl">
-                                Simpan
+                              <Button
+                                onClick={doReject}
+                                className="rounded-xl"
+                                disabled={isSubmitting || !note.trim()}
+                              >
+                                {isSubmitting ? 'Menyimpan...' : 'Simpan'}
                               </Button>
                             </DialogFooter>
                           </DialogContent>

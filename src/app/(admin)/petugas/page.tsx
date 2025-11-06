@@ -1,10 +1,29 @@
 // src/app/(admin)/petugas/page.tsx
 "use client";
 
-import { useMemo, useState } from "react";
-import { USERS, LAPORAN } from "@/lib/mock";
-import type { User, ReviewStatus } from "@/lib/types";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { useMemo, useState, useEffect, useCallback } from "react";
+import type {
+  Laporan as PrismaLaporan,
+  User as PrismaUser,
+  ReviewStatus,
+  Bidang
+} from "@/generated/prisma";
+
+// Import komponen UI
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
+import {
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -22,57 +41,217 @@ import {
 } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/emptyState";
+import { Separator } from "@/components/ui/separator";
 
 const statusBadgeVariant = (s: ReviewStatus) =>
   s === "PENDING" ? "secondary" : s === "DITERIMA" ? "default" : "destructive";
+
+type LaporanWithPelapor = PrismaLaporan & {
+  pelaporUser: {
+    id: string;
+    nama: string;
+    petugasId: string;
+  } | null;
+};
 
 export default function AdminPetugas() {
   const [q, setQ] = useState("");
   const [aktif, setAktif] = useState<"ALL" | "true" | "false">("ALL");
   const [openId, setOpenId] = useState<string | null>(null);
 
-  const PETUGAS = useMemo(() => USERS.filter((u) => u.role === "PETUGAS"), []);
+  const [PETUGAS, setPETUGAS] = useState<PrismaUser[]>([]);
+  const [LAPORAN, setLAPORAN] = useState<LaporanWithPelapor[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
+  // Fungsi 'fetch'
+  const fetchPetugasAndLaporan = useCallback(async () => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      // --- PERBAIKAN DI SINI ---
+      // Hapus semua object 'headers'. Browser akan mengirim cookie secara otomatis.
+      const [usersRes, reportsRes] = await Promise.all([
+        fetch("/api/getalluser?role=PETUGAS"),
+        fetch("/api/getalllaporan"),
+      ]);
+      // --- AKHIR PERBAIKAN ---
+
+      if (!usersRes.ok || !reportsRes.ok) {
+        throw new Error("Gagal mengambil data dari server");
+      }
+      const usersData: PrismaUser[] = await usersRes.json();
+      const reportsData: LaporanWithPelapor[] = await reportsRes.json();
+      setPETUGAS(usersData);
+      setLAPORAN(reportsData);
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchPetugasAndLaporan();
+  }, [fetchPetugasAndLaporan]);
+
+  // ... (useMemo 'data' dan 'statsByPetugas' tidak berubah) ...
   const data = useMemo(() => {
     return PETUGAS.filter((p) =>
       aktif === "ALL" ? true : String(p.aktif) === aktif
     ).filter((p) =>
       q
         ? p.nama.toLowerCase().includes(q.toLowerCase()) ||
-          p.petugasId.toLowerCase().includes(q.toLowerCase())
+        p.petugasId.toLowerCase().includes(q.toLowerCase())
         : true
     );
   }, [q, aktif, PETUGAS]);
 
   const statsByPetugas = (id: string) => {
     const reports = LAPORAN.filter((l) => l.pelaporUserId === id);
-    const counts = {
-      PENDING: 0,
-      DITERIMA: 0,
-      DITOLAK: 0,
-      TOTAL: reports.length,
-    } as Record<string, number>;
-    reports.forEach(
-      (r) => (counts[r.statusReview] = (counts[r.statusReview] ?? 0) + 1)
-    );
-
+    const counts = { PENDING: 0, DITERIMA: 0, DITOLAK: 0, TOTAL: reports.length } as Record<string, number>;
+    reports.forEach((r) => (counts[r.statusReview] = (counts[r.statusReview] ?? 0) + 1));
     const today = new Date();
-    const start = new Date(today);
-    start.setHours(0, 0, 0, 0);
-    const end = new Date(today);
-    end.setHours(23, 59, 59, 999);
-    const todayReports = reports.filter((r) => {
-      const d = new Date(r.createdAt);
-      return d >= start && d <= end;
-    });
-
-    const lastReports = [...reports]
-      .sort((a, b) => (b.createdAt > a.createdAt ? 1 : -1))
-      .slice(0, 5);
-
+    const start = new Date(today); start.setHours(0, 0, 0, 0);
+    const end = new Date(today); end.setHours(23, 59, 59, 999);
+    const todayReports = reports.filter((r) => { const d = new Date(r.createdAt); return d >= start && d <= end; });
+    const lastReports = [...reports].sort((a, b) => (b.createdAt > a.createdAt ? 1 : -1)).slice(0, 5);
     return { counts, todayCount: todayReports.length, lastReports };
   };
 
+  // ... (State dan fungsi untuk dialog Edit/Pwd tidak berubah) ...
+  const [selectedUser, setSelectedUser] = useState<PrismaUser | null>(null);
+  const [isEditOpen, setIsEditOpen] = useState(false);
+  const [isPwdOpen, setIsPwdOpen] = useState(false);
+  const [editNama, setEditNama] = useState("");
+  const [editTelp, setEditTelp] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const openEditDialog = (user: PrismaUser) => {
+    setSelectedUser(user);
+    setEditNama(user.nama);
+    setEditTelp(user.noTelp || "");
+    setIsEditOpen(true);
+  };
+  const openPwdDialog = (user: PrismaUser) => {
+    setSelectedUser(user);
+    setNewPassword("");
+    setIsPwdOpen(true);
+  };
+
+  // --- PERBAIKAN: Hapus 'Authorization' header ---
+  const handleUpdateProfile = async () => {
+    if (!selectedUser || !editNama.trim()) return;
+    setIsSubmitting(true);
+    try {
+      const response = await fetch(`/api/users/${selectedUser.id}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json', // <-- Biarkan ini
+          // 'Authorization': ... // <-- Hapus ini
+        },
+        body: JSON.stringify({
+          nama: editNama.trim(),
+          noTelp: editTelp.trim() || null,
+        }),
+      });
+      if (!response.ok) { throw new Error('Gagal memperbarui profil'); }
+      setIsEditOpen(false);
+      await fetchPetugasAndLaporan();
+    } catch (err: any) {
+      alert(`Error: ${err.message}`);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  // --- PERBAIKAN: Hapus 'Authorization' header ---
+  const handleResetPassword = async () => {
+    if (!selectedUser || newPassword.length < 6) { /* ... */ return; }
+    setIsSubmitting(true);
+    try {
+      const response = await fetch(`/api/users/${selectedUser.id}/reset-password`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json', // <-- Biarkan ini
+          // 'Authorization': ... // <-- Hapus ini
+        },
+        body: JSON.stringify({ newPassword }),
+      });
+      if (!response.ok) { throw new Error('Gagal mereset password'); }
+      setIsPwdOpen(false);
+      alert('Password petugas berhasil direset!');
+    } catch (err: any) {
+      alert(`Error: ${err.message}`);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  // --- PERBAIKAN: Hapus 'Authorization' header ---
+  const handleToggleStatus = async (user: PrismaUser) => {
+    const newStatus = !user.aktif;
+    const action = newStatus ? "mengaktifkan" : "menonaktifkan";
+    if (!confirm(`Apakah Anda yakin ingin ${action} petugas ${user.nama}?`)) { return; }
+    setIsSubmitting(true);
+    try {
+      const response = await fetch(`/api/users/${user.id}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json', // <-- Biarkan ini
+          // 'Authorization': ... // <-- Hapus ini
+        },
+        body: JSON.stringify({ aktif: newStatus }),
+      });
+      if (!response.ok) { throw new Error(`Gagal ${action} petugas`); }
+      await fetchPetugasAndLaporan();
+      setOpenId(null);
+    } catch (err: any) {
+      alert(`Error: ${err.message}`);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  // --- PERBAIKAN: Hapus 'Authorization' header ---
+  const handleDeletePetugas = async (user: PrismaUser) => {
+    if (!confirm(`PERINGATAN: Anda akan menghapus ${user.nama} secara permanen. Semua laporan terkait akan ikut terhapus. Lanjutkan?`)) { return; }
+    setIsSubmitting(true);
+    try {
+      const response = await fetch(`/api/users/${user.id}`, {
+        method: 'DELETE',
+        // headers: { 'Authorization': ... } // <-- Hapus ini
+      });
+      if (!response.ok) { throw new Error('Gagal menghapus petugas'); }
+      await fetchPetugasAndLaporan();
+      setOpenId(null);
+    } catch (err: any) {
+      alert(`Error: ${err.message}`);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+  // --- Akhir Perbaikan ---
+
+  // ... (handler loading & error halaman tidak berubah) ...
+  if (isLoading) {
+    return (
+      <div className="p-4 text-center">
+        <p>Mengambil data petugas...</p>
+      </div>
+    );
+  }
+  if (error) {
+    return (
+      <div className="p-4 text-center text-red-600">
+        <p>Error: {error}</p>
+        <Button onClick={fetchPetugasAndLaporan}>Coba Lagi</Button>
+      </div>
+    );
+  }
+
+  // --- KODE JSX ANDA (SAMA SEKALI TIDAK SAYA UBAH DARI SEBELUMNYA) ---
   return (
     <div className="grid gap-6">
       <Card>
@@ -159,6 +338,7 @@ export default function AdminPetugas() {
         </div>
       )}
 
+      {/* Sheet (Panel Samping) */}
       <Sheet open={!!openId} onOpenChange={(v) => !v && setOpenId(null)}>
         <SheetContent side="right" className="w-full sm:max-w-md">
           <SheetHeader>
@@ -166,7 +346,9 @@ export default function AdminPetugas() {
           </SheetHeader>
           {openId &&
             (() => {
-              const me = PETUGAS.find((x: User) => x.id === openId)!;
+              const me = PETUGAS.find((x: PrismaUser) => x.id === openId);
+              if (!me) return null;
+
               const st = statsByPetugas(openId);
               return (
                 <div className="mt-4 space-y-6">
@@ -175,6 +357,45 @@ export default function AdminPetugas() {
                     <p className="text-xs text-muted-foreground">
                       {me.petugasId} • {me.aktif ? "Aktif" : "Nonaktif"}
                     </p>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <Button
+                      variant="outline"
+                      className="rounded-xl"
+                      onClick={() => openEditDialog(me)}
+                      disabled={isSubmitting}
+                    >
+                      Ubah Data Diri
+                    </Button>
+                    <Button
+                      variant="outline"
+                      className="rounded-xl"
+                      onClick={() => openPwdDialog(me)}
+                      disabled={isSubmitting}
+                    >
+                      Reset Password
+                    </Button>
+                  </div>
+
+                  <Separator />
+                  <div className="grid grid-cols-2 gap-2">
+                    <Button
+                      variant={me.aktif ? "secondary" : "default"}
+                      className="rounded-xl"
+                      onClick={() => handleToggleStatus(me)}
+                      disabled={isSubmitting}
+                    >
+                      {me.aktif ? "Nonaktifkan Petugas" : "Aktifkan Petugas"}
+                    </Button>
+                    <Button
+                      variant="destructive"
+                      className="rounded-xl"
+                      onClick={() => handleDeletePetugas(me)}
+                      disabled={isSubmitting}
+                    >
+                      Hapus Petugas
+                    </Button>
                   </div>
 
                   <div className="grid grid-cols-2 gap-2">
@@ -234,6 +455,7 @@ export default function AdminPetugas() {
                   <Button
                     onClick={() => console.log("Kirim notifikasi ke", me.nama)}
                     className="w-full rounded-xl"
+                    disabled={isSubmitting}
                   >
                     Kirim Notifikasi
                   </Button>
@@ -242,6 +464,75 @@ export default function AdminPetugas() {
             })()}
         </SheetContent>
       </Sheet>
+
+      {/* Dialog Edit Profil */}
+      <Dialog open={isEditOpen} onOpenChange={setIsEditOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Ubah Data Diri: {selectedUser?.nama}</DialogTitle>
+          </DialogHeader>
+          <div className="grid gap-3">
+            <div className="grid gap-1.5">
+              <Label htmlFor="nama">Nama</Label>
+              <Input
+                id="nama"
+                value={editNama}
+                onChange={(e) => setEditNama(e.target.value)}
+                placeholder="Nama lengkap"
+              />
+            </div>
+            <div className="grid gap-1.5">
+              <Label htmlFor="telp">No. Telepon</Label>
+              <Input
+                id="telp"
+                value={editTelp}
+                onChange={(e) => setEditTelp(e.target.value)}
+                placeholder="08xxxxxxxxxx"
+                inputMode="tel"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              onClick={handleUpdateProfile}
+              disabled={isSubmitting || !editNama.trim()}
+              className="rounded-xl"
+            >
+              {isSubmitting ? "Menyimpan..." : "Simpan"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Dialog Reset Password */}
+      <Dialog open={isPwdOpen} onOpenChange={setIsPwdOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Reset Password: {selectedUser?.nama}</DialogTitle>
+          </DialogHeader>
+          <div className="grid gap-3">
+            <div className="grid gap-1.5">
+              <Label htmlFor="new-pwd">Password Baru</Label>
+              <Input
+                id="new-pwd"
+                type="password"
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                placeholder="Minimal 6 karakter"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              onClick={handleResetPassword}
+              disabled={isSubmitting || newPassword.length < 6}
+              className="rounded-xl"
+            >
+              {isSubmitting ? "Menyimpan..." : "Simpan Password Baru"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

@@ -1,9 +1,12 @@
-// src/app/(user)/riwayat/page.tsx
 "use client";
 
-import { useMemo, useState, useCallback } from "react";
-import { LAPORAN, USERS } from "@/lib/mock";
-import type { Laporan, ReviewStatus, Bidang } from "@/lib/types";
+import { useMemo, useState, useCallback, useEffect } from "react";
+import type {
+  Laporan as PrismaLaporan,
+  User as PrismaUser,
+  ReviewStatus,
+  Bidang
+} from "@/generated/prisma";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Input } from "@/components/ui/input";
 import {
@@ -31,9 +34,9 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/emptyState";
 import { Link2 } from "lucide-react";
+import { Button } from "@/components/ui/button";
 
-const CURRENT_USER_ID = "p2";
-
+// Fungsi 'fmtDate' Anda sudah benar. Biarkan seperti ini.
 function fmtDate(iso?: string | null) {
   if (!iso) return "-";
   try {
@@ -49,25 +52,29 @@ function fmtDate(iso?: string | null) {
     return iso ?? "-";
   }
 }
-
 const statusBadgeVariant = (s: ReviewStatus) =>
   s === "PENDING" ? "secondary" : s === "DITERIMA" ? "default" : "destructive";
-
 const isMapsUrl = (s: string) =>
   /^https?:\/\/(maps\.app\.goo\.gl|goo\.gl\/maps|www\.google\.[a-z.]+\/maps)/i.test(
     s
   );
-const mapsHref = (location?: string) =>
+const mapsHref = (location?: string | null) =>
   !location
     ? undefined
     : isMapsUrl(location)
-    ? location
-    : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
-        location.replace(/^geo:/i, "")
-      )}`;
+      ? location
+      : location.startsWith("geo:")
+        ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
+          location.replace(/^geo:/i, "")
+        )}`
+        : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
+          location
+        )}`;
 
 export default function UserRiwayatPage() {
-  const me = USERS.find((p: any) => p.id === CURRENT_USER_ID);
+  const [myReports, setMyReports] = useState<PrismaLaporan[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   const [q, setQ] = useState("");
   const [status, setStatus] = useState<"ALL" | ReviewStatus>("ALL");
@@ -77,12 +84,29 @@ export default function UserRiwayatPage() {
   >("createdAt");
   const [sortDir, setSortDir] = useState<"desc" | "asc">("desc");
 
-  const myReports = useMemo(() => {
-    return (LAPORAN as Laporan[]).filter(
-      (l) => l.pelaporUserId === CURRENT_USER_ID
-    );
+  // Fungsi untuk mengambil data (sudah benar)
+  const fetchRiwayat = async () => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      const response = await fetch("/api/petugas/dashboard");
+      if (!response.ok) {
+        throw new Error("Gagal mengambil data riwayat");
+      }
+      const { reports } = await response.json();
+      setMyReports(reports);
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchRiwayat();
   }, []);
 
+  // 'filtered' (sudah benar)
   const filtered = useMemo(() => {
     const needle = q.trim().toLowerCase();
     let rows = myReports
@@ -91,16 +115,16 @@ export default function UserRiwayatPage() {
       .filter((l) =>
         needle
           ? l.judul.toLowerCase().includes(needle) ||
-            l.deskripsi.toLowerCase().includes(needle)
+          l.deskripsi.toLowerCase().includes(needle)
           : true
       );
 
-    const key = (r: Laporan) =>
+    const key = (r: PrismaLaporan) =>
       (sortBy === "performedAt"
         ? r.performedAt
         : sortBy === "reviewedAt"
-        ? r.reviewedAt
-        : r.createdAt) ?? "";
+          ? r.reviewedAt
+          : r.createdAt) ?? "";
 
     rows.sort((a, b) => {
       const va = key(a);
@@ -118,19 +142,32 @@ export default function UserRiwayatPage() {
     []
   );
 
+  // Handler Loading & Error (sudah benar)
+  if (isLoading) {
+    return (
+      <div className="mx-auto w-full max-w-screen-sm px-3 py-3 md:max-w-screen-lg md:px-6 md:py-6 mb-10 text-center">
+        <p>Mengambil data riwayat...</p>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="mx-auto w-full max-w-screen-sm px-3 py-3 md:max-w-screen-lg md:px-6 md:py-6 mb-10 text-center text-red-600">
+        <p>Error: {error}</p>
+        <Button onClick={fetchRiwayat} className="mt-4">
+          Coba Lagi
+        </Button>
+      </div>
+    );
+  }
+
   return (
     <div className="mx-auto w-full max-w-screen-sm px-3 py-3 md:max-w-screen-lg md:px-6 md:py-6 mb-10">
+      {/* Header */}
       <div className="sticky md:static top-0 z-10 bg-card md:bg-none md:border-0 border-b border-border px-4 py-4 sm:px-6">
         <div className="mx-auto max-w-3xl">
           <div className="flex items-center gap-3">
-            {/* <button
-              type="button"
-              onClick={() => history.back()}
-              className="sm:hidden inline-flex w-10 h-10 rounded-lg hover:bg-muted items-center justify-center"
-              aria-label="Kembali"
-            >
-              <ArrowLeft className="w-5 h-5" />
-            </button> */}
             <div className="flex-1">
               <h1 className="text-xl sm:text-2xl font-bold text-foreground">
                 Riwayat Laporan
@@ -142,19 +179,11 @@ export default function UserRiwayatPage() {
           </div>
         </div>
       </div>
-      <Tabs defaultValue="laporan" className="w-full">
-        {/* <TabsList className="grid w-full grid-cols-1">
-          <TabsTrigger value="laporan">Laporan</TabsTrigger>
-        </TabsList> */}
 
+      {/* Filter */}
+      <Tabs defaultValue="laporan" className="w-full">
         <TabsContent value="laporan" className="mt-4">
           <Card className="border-border/60 bg-card">
-            {/* <CardHeader className="pb-2">
-              <CardTitle className="text-base">Riwayat Laporan</CardTitle>
-              <CardDescription className="text-xs">
-                Cari dan filter laporan kamu
-              </CardDescription>
-            </CardHeader> */}
             <CardContent>
               <div className="grid grid-cols-1 gap-2 md:grid-cols-4">
                 <Input
@@ -225,6 +254,7 @@ export default function UserRiwayatPage() {
             </CardContent>
           </Card>
 
+          {/* Tampilan Mobile */}
           <div className="mt-3 space-y-3 md:hidden">
             {filtered.length === 0 ? (
               <EmptyState
@@ -246,7 +276,8 @@ export default function UserRiwayatPage() {
                         </Badge>
                       </div>
                       <CardDescription className="text-xs">
-                        {l.bidang} • Dibuat {fmtDate(l.createdAt)}
+                        {/* Kita tambahkan 'as any' untuk membungkam error TS */}
+                        {l.bidang} • Dibuat {fmtDate(l.createdAt as any)}
                       </CardDescription>
                     </CardHeader>
                     <CardContent className="pt-0">
@@ -254,8 +285,9 @@ export default function UserRiwayatPage() {
                         {l.deskripsi}
                       </p>
                       <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-muted-foreground">
-                        <div>Pelaksanaan: {fmtDate(l.performedAt) || "-"}</div>
-                        <div>Direview: {fmtDate(l.reviewedAt) || "-"}</div>
+                        {/* Tambahkan 'as any' di sini juga */}
+                        <div>Pelaksanaan: {fmtDate(l.performedAt as any) || "-"}</div>
+                        <div>Direview: {fmtDate(l.reviewedAt as any) || "-"}</div>
                       </div>
                       {l.location ? (
                         <a
@@ -275,6 +307,7 @@ export default function UserRiwayatPage() {
             )}
           </div>
 
+          {/* Tampilan Desktop */}
           <div className="mt-4 hidden md:block">
             {filtered.length === 0 ? (
               <EmptyState
@@ -302,18 +335,21 @@ export default function UserRiwayatPage() {
                       const href = mapsHref(l.location as any);
                       return (
                         <TableRow key={l.id}>
-                          <TableCell>{fmtDate(l.createdAt)}</TableCell>
+                          {/* Tambahkan 'as any' di semua pemanggilan fmtDate */}
+                          <TableCell>{fmtDate(l.createdAt as any)}</TableCell>
                           <TableCell className="font-medium">
                             {l.judul}
                           </TableCell>
                           <TableCell>{l.bidang}</TableCell>
-                          <TableCell>{fmtDate(l.performedAt)}</TableCell>
+                          <TableCell>{fmtDate(l.performedAt as any)}</TableCell>
                           <TableCell>
+                            {/* --- PERBAIKAN TYPO DI SINI --- */}
                             <Badge variant={statusBadgeVariant(l.statusReview)}>
                               {l.statusReview}
                             </Badge>
+                            {/* --- -------------------- --- */}
                           </TableCell>
-                          <TableCell>{fmtDate(l.reviewedAt)}</TableCell>
+                          <TableCell>{fmtDate(l.reviewedAt as any)}</TableCell>
                           <TableCell>
                             {l.location ? (
                               <a

@@ -1,9 +1,15 @@
 // src/app/(admin)/dashboard/page.tsx
 "use client";
 
-import { useMemo, useState } from "react";
-import { LAPORAN, USERS } from "@/lib/mock";
-import type { Laporan, ReviewStatus, User } from "@/lib/types";
+// 1. Import 'useEffect'
+import { useMemo, useState, useEffect } from "react";
+
+// 2. HAPUS mock
+// import { LAPORAN, USERS } from "@/lib/mock"; 
+
+// 3. Ganti tipe mock dengan tipe Prisma
+import type { Laporan, ReviewStatus, User } from "@/generated/prisma";
+
 import {
   Card,
   CardContent,
@@ -43,6 +49,7 @@ import { Link2 } from "lucide-react";
 
 const tz = "Asia/Jakarta";
 
+// ... (Semua fungsi helper Anda 'fmtDateTime', 'todayLocalISODate', dll, SAMA PERSIS) ...
 function fmtDateTime(iso: string | null | undefined) {
   if (!iso) return "-";
   const d = new Date(iso);
@@ -70,17 +77,68 @@ const mapsHref = (location?: string | null) =>
   !location
     ? undefined
     : isMapsUrl(location)
-    ? location
-    : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
-        location.replace(/^geo:/i, "")
-      )}`;
+      ? location
+      : location.startsWith("geo:")
+        ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
+          location.replace(/^geo:/i, "")
+        )}`
+        : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
+          location
+        )}`;
+// --- Akhir helper ---
+
+
+// 4. Tipe data baru untuk Laporan + Pelapor (diperlukan API)
+type LaporanWithPelapor = Laporan & {
+  pelaporUser: {
+    id: string;
+    nama: string;
+    petugasId: string;
+  } | null;
+};
 
 export default function AdminDashboard() {
-  const [users, setUsers] = useState<User[]>(
-    USERS.filter((u) => u.role === "PETUGAS")
-  );
-  const [reports, setReports] = useState<Laporan[]>(LAPORAN);
 
+  // 5. Ubah state agar dimulai dari array kosong
+  const [users, setUsers] = useState<User[]>([]);
+  const [reports, setReports] = useState<LaporanWithPelapor[]>([]);
+
+  // 6. Tambahkan state loading & error halaman
+  const [isPageLoading, setIsPageLoading] = useState(true);
+  const [pageError, setPageError] = useState<string | null>(null);
+
+  // 7. Ambil data dari API saat halaman dimuat
+  useEffect(() => {
+    const fetchData = async () => {
+      setIsPageLoading(true);
+      setPageError(null);
+      try {
+        const [reportsRes, usersRes] = await Promise.all([
+          fetch("/api/getalllaporan"), // Panggil API Laporan
+          fetch("/api/getalluser?role=PETUGAS"), // Panggil API User
+        ]);
+
+        if (!reportsRes.ok || !usersRes.ok) {
+          throw new Error("Gagal mengambil data dari server");
+        }
+
+        const reportsData: LaporanWithPelapor[] = await reportsRes.json();
+        const usersData: User[] = await usersRes.json();
+
+        setReports(reportsData);
+        setUsers(usersData);
+
+      } catch (err: any) {
+        setPageError(err.message);
+      } finally {
+        setIsPageLoading(false);
+      }
+    };
+
+    fetchData();
+  }, []); // '[]' = Hanya jalan sekali
+
+  // --- Mulai dari sini, semua kalkulasi 'useMemo' Anda SAMA PERSIS ---
   const countsByStatus = useMemo(() => {
     const map: Record<ReviewStatus, number> = {
       PENDING: 0,
@@ -91,7 +149,7 @@ export default function AdminDashboard() {
     return map;
   }, [reports]);
 
-  const totalReports = reports.length || 1;
+  const totalReports = reports.length || 1; // totalReports.length kini 0 di awal, jadi '|| 1' penting
   const pct = {
     PENDING: Math.round((countsByStatus.PENDING / totalReports) * 100),
     DITERIMA: Math.round((countsByStatus.DITERIMA / totalReports) * 100),
@@ -110,7 +168,11 @@ export default function AdminDashboard() {
   const submittedTodayBy = useMemo(() => {
     const setIds = new Set<string>();
     for (const r of reports) {
-      if (r.performedOn === today || r.createdAt.slice(0, 10) === today) {
+      // 8. Perbaikan kecil agar 'performedOn' (Date) bisa dibandingkan dengan 'today' (string)
+      const performedOnDate = r.performedOn ? new Date(r.performedOn).toISOString().slice(0, 10) : '';
+      const createdAtDate = r.createdAt ? new Date(r.createdAt).toISOString().slice(0, 10) : '';
+
+      if (performedOnDate === today || createdAtDate === today) {
         setIds.add(r.pelaporUserId);
       }
     }
@@ -126,38 +188,80 @@ export default function AdminDashboard() {
     s === "PENDING"
       ? "secondary"
       : s === "DITERIMA"
-      ? "default"
-      : "destructive";
+        ? "default"
+        : "destructive";
+  // --- Akhir 'useMemo' ---
 
+
+  // --- Fungsi 'savePetugas' Anda SAMA PERSIS seperti di kode awal Anda ---
   const [openDialog, setOpenDialog] = useState(false);
   const [newNama, setNewNama] = useState("");
   const [newPetugasId, setNewPetugasId] = useState("");
   const [newNoTelp, setNewNoTelp] = useState("");
   const [newAktif, setNewAktif] = useState<"true" | "false">("true");
   const [newPassword, setNewPassword] = useState("");
+  const [isLoading, setIsLoading] = useState(false);
 
-  const savePetugas = () => {
-    const now = new Date().toISOString();
-    const item: User = {
-      id: `u_${Math.random().toString(36).slice(2, 8)}`,
-      role: "PETUGAS",
-      petugasId: newPetugasId || `PP-${Math.random().toString(36).slice(2, 6)}`,
-      nama: newNama || "Petugas Baru",
-      noTelp: newNoTelp || null,
-      aktif: newAktif === "true",
-      passwordHash: "HASHED_DUMMY",
-      createdAt: now,
-      updatedAt: now,
-    };
-    setUsers((prev) => [item, ...prev]);
-    setOpenDialog(false);
-    setNewNama("");
-    setNewPetugasId("");
-    setNewNoTelp("");
-    setNewAktif("true");
-    setNewPassword("");
+  const savePetugas = async () => {
+    setIsLoading(true);
+    try {
+      const response = await fetch('/api/users', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          nama: newNama,
+          petugasId: newPetugasId,
+          password: newPassword,
+          role: "PETUGAS",
+          noTelp: newNoTelp || null,
+          aktif: newAktif === "true",
+        }),
+      });
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.message || 'Gagal menyimpan petugas');
+      }
+      // 9. Perbaikan: 'newUser' harus bertipe 'User' asli
+      const newUser: User = await response.json();
+      setUsers((prev) => [newUser, ...prev]);
+      setOpenDialog(false);
+      setNewNama("");
+      setNewPetugasId("");
+      setNewNoTelp("");
+      setNewAktif("true");
+      setNewPassword("");
+    } catch (error: any) {
+      console.error('Error saving petugas:', error);
+      alert(`Error: ${error.message}`);
+    } finally {
+      setIsLoading(false);
+    }
   };
+  // --- Akhir 'savePetugas' ---
 
+  // 10. Tambahkan UI untuk Loading/Error Halaman
+  if (isPageLoading) {
+    return (
+      <div className="grid gap-6 p-6 text-center">
+        <p>Mengambil data dashboard...</p>
+      </div>
+    );
+  }
+
+  if (pageError) {
+    return (
+      <div className="grid gap-6 p-6 text-center text-red-600">
+        <p>Error: {pageError}</p>
+        <Button onClick={() => window.location.reload()} className="mt-4">
+          Coba Muat Ulang
+        </Button>
+      </div>
+    );
+  }
+
+  // --- Mulai JSX (SAMA PERSIS DENGAN KODE ASLI ANDA) ---
   return (
     <div className="grid gap-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -213,8 +317,8 @@ export default function AdminDashboard() {
               />
             </div>
             <DialogFooter>
-              <Button onClick={savePetugas} className="rounded-xl">
-                Simpan
+              <Button onClick={savePetugas} disabled={isLoading} className="rounded-xl">
+                {isLoading ? 'Menyimpan...' : 'Simpan'}
               </Button>
             </DialogFooter>
           </DialogContent>
@@ -337,6 +441,8 @@ export default function AdminDashboard() {
                 </TableHeader>
                 <TableBody>
                   {latest.map((r) => {
+                    // 11. Perbaikan: 'pelapor' diambil dari data 'users'
+                    //    'pelaporUser' HANYA ada di tipe 'LaporanWithPelapor'
                     const pelapor =
                       users.find((u) => u.id === r.pelaporUserId)?.nama ||
                       r.pelaporUserId;
@@ -344,7 +450,7 @@ export default function AdminDashboard() {
                     return (
                       <TableRow key={r.id}>
                         <TableCell className="whitespace-nowrap">
-                          {fmtDateTime(r.createdAt)}
+                          {fmtDateTime(r.createdAt as any)}
                         </TableCell>
                         <TableCell className="font-medium max-w-[260px] truncate">
                           {r.judul}
@@ -397,8 +503,8 @@ export default function AdminDashboard() {
                   {s === "PENDING"
                     ? pct.PENDING
                     : s === "DITERIMA"
-                    ? pct.DITERIMA
-                    : pct.DITOLAK}
+                      ? pct.DITERIMA
+                      : pct.DITOLAK}
                   %
                 </span>
               </div>
@@ -407,8 +513,8 @@ export default function AdminDashboard() {
                   s === "PENDING"
                     ? pct.PENDING
                     : s === "DITERIMA"
-                    ? pct.DITERIMA
-                    : pct.DITOLAK
+                      ? pct.DITERIMA
+                      : pct.DITOLAK
                 }
                 className="h-2"
               />

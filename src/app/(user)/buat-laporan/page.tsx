@@ -42,33 +42,53 @@ export default function UserLaporanBaru() {
     performedAt: isoDateTimeLocal,
   });
 
+  // --- PERUBAHAN 1: State untuk file asli & loading ---
+  const [filesToUpload, setFilesToUpload] = useState<File[]>([]);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  // --- Akhir Perubahan 1 ---
+
   const [errors, setErrors] = useState<
     Partial<Record<keyof LaporanForm | "performedOn", string>>
   >({});
   const [showSuccess, setShowSuccess] = useState(false);
   const [isGettingLocation, setIsGettingLocation] = useState(false);
 
+  // --- PERUBAHAN 2: Modifikasi 'handleFileUpload' ---
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (files && files.length > 0) {
-      const newFiles = Array.from(files).map((f) => URL.createObjectURL(f));
+      const fileArray = Array.from(files);
+
+      // 1. Buat URL preview untuk ditampilkan di <img>
+      const newFiles = fileArray.map((f) => URL.createObjectURL(f));
       setForm((prev) => ({
         ...prev,
         fotoSesudah: [...prev.fotoSesudah, ...newFiles],
       }));
+
+      // 2. Simpan file ASLI untuk di-upload
+      setFilesToUpload((prevFiles) => [...prevFiles, ...fileArray]);
+
       setErrors((prev) => ({ ...prev, fotoSesudah: undefined }));
     }
   };
+  // --- Akhir Perubahan 2 ---
 
+  // --- PERUBAHAN 3: Modifikasi 'removePhoto' ---
   const removePhoto = (index: number) => {
+    // 1. Hapus URL preview
     setForm((prev) => ({
       ...prev,
       fotoSesudah: prev.fotoSesudah.filter((_, i) => i !== index),
     }));
+    // 2. Hapus file ASLI
+    setFilesToUpload((prevFiles) => prevFiles.filter((_, i) => i !== index));
   };
+  // --- Akhir Perubahan 3 ---
 
   const getCurrentLocation = () => {
     setIsGettingLocation(true);
+    // TODO: Ganti dengan Geolocation API
     setTimeout(() => {
       const lat = -6.197;
       const lng = 106.84;
@@ -78,6 +98,7 @@ export default function UserLaporanBaru() {
     }, 900);
   };
 
+  // --- PERUBAHAN 4: Modifikasi 'validate' ---
   const validate = (): boolean => {
     const newErrors: Partial<
       Record<keyof LaporanForm | "performedOn", string>
@@ -89,8 +110,11 @@ export default function UserLaporanBaru() {
     if (!form.deskripsi.trim()) newErrors.deskripsi = "Deskripsi wajib diisi";
     else if (form.deskripsi.trim().length < 10)
       newErrors.deskripsi = "Deskripsi minimal 10 karakter";
-    if (form.fotoSesudah.length === 0)
+
+    // Cek file asli, bukan URL preview
+    if (filesToUpload.length === 0)
       newErrors.fotoSesudah = "Minimal 1 foto sesudah harus diunggah";
+
     if (!form.location.trim()) newErrors.location = "Lokasi wajib diisi";
     if (!form.performedAt)
       newErrors.performedAt = "Waktu pelaksanaan wajib diisi";
@@ -99,40 +123,76 @@ export default function UserLaporanBaru() {
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
   };
+  // --- Akhir Perubahan 4 ---
 
+  // --- PERUBAHAN 5: Modifikasi 'handleSubmit' (Sambungan API) ---
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!validate()) return;
-    const performedOn = toPerformedOn(form.performedAt);
-    const payload = {
-      judul: form.judul.trim(),
-      deskripsi: form.deskripsi.trim(),
-      bidang: form.bidang as Bidang,
-      location: form.location.trim(),
-      fotoSesudah: form.fotoSesudah,
-      performedAt: new Date(form.performedAt).toISOString(),
-      performedOn,
-    };
-    console.log("POST /api/laporan (mock):", payload);
-    setShowSuccess(true);
-    setTimeout(() => {
-      setShowSuccess(false);
-      setForm({
-        judul: "",
-        deskripsi: "",
-        bidang: "",
-        location: "",
-        fotoSesudah: [],
-        performedAt: isoDateTimeLocal,
+    if (!validate()) return; // Jalankan validasi
+
+    setIsSubmitting(true); // Mulai loading
+
+    try {
+      // 1. Buat FormData
+      const formData = new FormData();
+
+      // 2. Tambahkan semua field teks
+      formData.append("judul", form.judul.trim());
+      formData.append("deskripsi", form.deskripsi.trim());
+      formData.append("bidang", form.bidang as Bidang);
+      formData.append("location", form.location.trim());
+      formData.append("performedAt", new Date(form.performedAt).toISOString());
+
+      // 3. Tambahkan semua file dari state 'filesToUpload'
+      for (const file of filesToUpload) {
+        formData.append("fotoSesudah", file);
+      }
+
+      // 4. Kirim FormData ke backend
+      const response = await fetch("/api/laporan", {
+        method: "POST",
+        body: formData,
+        // headers: { 'Authorization': 'Bearer <TOKEN_JWT_PETUGAS>' } // Nanti
       });
-    }, 1500);
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.message || "Gagal membuat laporan");
+      }
+
+      // 5. Sukses
+      setShowSuccess(true);
+      setTimeout(() => {
+        setShowSuccess(false);
+        // Reset form
+        setForm({
+          judul: "",
+          deskripsi: "",
+          bidang: "",
+          location: "",
+          fotoSesudah: [],
+          performedAt: isoDateTimeLocal,
+        });
+        setFilesToUpload([]); // Reset state file
+      }, 1500);
+
+    } catch (error: any) {
+      console.error("Submit Laporan Error:", error);
+      setErrors({ judul: `Error: ${error.message}` }); // Tampilkan error di form
+    } finally {
+      setIsSubmitting(false); // Selesai loading
+    }
   };
+  // --- Akhir Perubahan 5 ---
 
   const isMapsUrl = (s: string) =>
     /^https?:\/\/(maps\.app\.goo\.gl|goo\.gl\/maps|www\.google\.[a-z.]+\/maps)/i.test(
       s
     );
 
+  // ==========================================================
+  // === KODE JSX ANDA (LENGKAP) DIMULAI DARI SINI ===
+  // ==========================================================
   return (
     <div className="min-h-screen bg-background pb-20 sm:pb-8">
       <div className="sticky md:static top-0 z-10 bg-card md:bg-none md:border-0 border-b border-border px-4 py-4 sm:px-6">
@@ -174,10 +234,10 @@ export default function UserLaporanBaru() {
                 setForm((p) => ({ ...p, judul: e.target.value }));
                 setErrors((prev) => ({ ...prev, judul: undefined }));
               }}
-              className={`w-full px-3 py-2.5 bg-background border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-ring ${
-                errors.judul ? "border-destructive" : "border-input"
-              }`}
+              className={`w-full px-3 py-2.5 bg-background border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-ring ${errors.judul ? "border-destructive" : "border-input"
+                } disabled:opacity-50`}
               placeholder="Contoh: Perbaikan tutup got Jl. Melati 3"
+              disabled={isSubmitting}
             />
             {errors.judul ? (
               <p className="mt-1 text-xs text-destructive">{errors.judul}</p>
@@ -201,11 +261,11 @@ export default function UserLaporanBaru() {
                     setForm((prev) => ({ ...prev, bidang: b }));
                     setErrors((prev) => ({ ...prev, bidang: undefined }));
                   }}
-                  className={`py-3 px-3 rounded-lg text-sm font-medium transition-all ${
-                    form.bidang === b
-                      ? "bg-primary text-primary-foreground shadow-sm"
-                      : "bg-muted/50 text-foreground hover:bg-muted"
-                  }`}
+                  className={`py-3 px-3 rounded-lg text-sm font-medium transition-all ${form.bidang === b
+                    ? "bg-primary text-primary-foreground shadow-sm"
+                    : "bg-muted/50 text-foreground hover:bg-muted"
+                    } disabled:opacity-50`}
+                  disabled={isSubmitting}
                 >
                   {b}
                 </button>
@@ -227,10 +287,10 @@ export default function UserLaporanBaru() {
                 setErrors((prev) => ({ ...prev, deskripsi: undefined }));
               }}
               rows={5}
-              className={`w-full px-3 py-3 bg-background border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-ring resize-none ${
-                errors.deskripsi ? "border-destructive" : "border-input"
-              }`}
+              className={`w-full px-3 py-3 bg-background border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-ring resize-none ${errors.deskripsi ? "border-destructive" : "border-input"
+                } disabled:opacity-50`}
               placeholder="Contoh: Tutup got patah ukuran 50x50cm diganti. Area disterilkan, aliran air dicek normal."
+              disabled={isSubmitting}
             />
             <div className="mt-2 flex items-center justify-between">
               {errors.deskripsi ? (
@@ -255,13 +315,12 @@ export default function UserLaporanBaru() {
                 <button
                   type="button"
                   onClick={getCurrentLocation}
-                  disabled={isGettingLocation}
+                  disabled={isGettingLocation || isSubmitting}
                   className="inline-flex items-center gap-1.5 rounded-lg bg-primary/10 px-3 py-1.5 text-xs font-medium text-primary transition-colors hover:bg-primary/20 disabled:opacity-50"
                 >
                   <Navigation
-                    className={`h-3.5 w-3.5 ${
-                      isGettingLocation ? "animate-pulse" : ""
-                    }`}
+                    className={`h-3.5 w-3.5 ${isGettingLocation ? "animate-pulse" : ""
+                      }`}
                   />
                   {isGettingLocation ? "Mencari..." : "Lokasi Saya"}
                 </button>
@@ -277,10 +336,10 @@ export default function UserLaporanBaru() {
                     setForm((prev) => ({ ...prev, location: e.target.value }));
                     setErrors((prev) => ({ ...prev, location: undefined }));
                   }}
-                  className={`w-full rounded-lg border border-input bg-background px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring ${
-                    errors.location ? "border-destructive" : ""
-                  }`}
+                  className={`w-full rounded-lg border border-input bg-background px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring ${errors.location ? "border-destructive" : ""
+                    } disabled:opacity-50`}
                   placeholder="geo:-6.197,106.840 atau tempel tautan Google Maps"
+                  disabled={isSubmitting}
                 />
                 {errors.location && (
                   <p className="mt-1 text-xs text-destructive">
@@ -295,12 +354,13 @@ export default function UserLaporanBaru() {
                     isMapsUrl(form.location)
                       ? form.location
                       : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
-                          form.location.replace(/^geo:/i, "")
-                        )}`
+                        form.location.replace(/^geo:/i, "")
+                      )}`
                   }
                   target="_blank"
                   rel="noreferrer"
-                  className="flex items-center justify-center gap-2 rounded-lg border border-border px-3 py-2.5 text-sm hover:bg-muted"
+                  className={`flex items-center justify-center gap-2 rounded-lg border border-border px-3 py-2.5 text-sm hover:bg-muted ${isSubmitting ? "pointer-events-none opacity-50" : ""
+                    }`}
                 >
                   <Link2 className="h-4 w-4" />
                   Buka Peta
@@ -334,10 +394,10 @@ export default function UserLaporanBaru() {
                     performedOn: undefined,
                   }));
                 }}
-                className={`w-full rounded-lg border bg-background px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring ${
-                  errors.performedAt ? "border-destructive" : "border-input"
-                }`}
+                className={`w-full rounded-lg border bg-background px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring ${errors.performedAt ? "border-destructive" : "border-input"
+                  } disabled:opacity-50`}
                 required
+                disabled={isSubmitting}
               />
               {(errors.performedAt || errors.performedOn) && (
                 <p className="mt-1 text-xs text-destructive">
@@ -358,15 +418,15 @@ export default function UserLaporanBaru() {
               onChange={handleFileUpload}
               className="hidden"
               id="photo-upload"
+              disabled={isSubmitting}
             />
             {form.fotoSesudah.length === 0 ? (
               <label
                 htmlFor="photo-upload"
-                className={`flex flex-col items-center justify-center gap-3 w-full py-8 sm:py-12 border-2 border-dashed rounded-lg cursor-pointer transition-colors ${
-                  errors.fotoSesudah
-                    ? "border-destructive hover:border-destructive/80"
-                    : "border-border hover:border-primary"
-                }`}
+                className={`flex flex-col items-center justify-center gap-3 w-full py-8 sm:py-12 border-2 border-dashed rounded-lg cursor-pointer transition-colors ${errors.fotoSesudah
+                  ? "border-destructive hover:border-destructive/80"
+                  : "border-border hover:border-primary"
+                  } ${isSubmitting ? "pointer-events-none opacity-50" : ""}`}
               >
                 <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-full bg-primary/10 flex items-center justify-center">
                   <Camera className="w-7 h-7 sm:w-8 sm:h-8 text-primary" />
@@ -396,8 +456,10 @@ export default function UserLaporanBaru() {
                       <button
                         type="button"
                         onClick={() => removePhoto(idx)}
-                        className="absolute top-2 right-2 w-7 h-7 bg-destructive text-destructive-foreground rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity shadow-lg"
+                        className={`absolute top-2 right-2 w-7 h-7 bg-destructive text-destructive-foreground rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity shadow-lg ${isSubmitting ? "hidden" : ""
+                          }`}
                         aria-label="Hapus foto"
+                        disabled={isSubmitting}
                       >
                         <X className="w-4 h-4" />
                       </button>
@@ -409,7 +471,8 @@ export default function UserLaporanBaru() {
                 </div>
                 <label
                   htmlFor="photo-upload"
-                  className="flex items-center justify-center gap-2 w-full py-2.5 border border-border rounded-lg hover:bg-muted cursor-pointer transition-colors"
+                  className={`flex items-center justify-center gap-2 w-full py-2.5 border border-border rounded-lg hover:bg-muted cursor-pointer transition-colors ${isSubmitting ? "pointer-events-none opacity-50" : ""
+                    }`}
                 >
                   <Camera className="w-4 h-4 text-muted-foreground" />
                   <span className="text-sm text-foreground">Tambah foto</span>
@@ -426,10 +489,11 @@ export default function UserLaporanBaru() {
           <div className="sticky bottom-0 -mx-4 border-t border-border bg-background px-4 pt-4 pb-4 sm:static sm:mx-0 sm:border-t-0 sm:px-0 sm:pt-0">
             <button
               type="submit"
-              className="flex w-full items-center justify-center gap-2 rounded-lg bg-primary px-4 py-3.5 font-medium text-primary-foreground shadow-lg transition-colors hover:bg-primary/90 sm:shadow-none"
+              disabled={isSubmitting}
+              className="flex w-full items-center justify-center gap-2 rounded-lg bg-primary px-4 py-3.5 font-medium text-primary-foreground shadow-lg transition-colors hover:bg-primary/90 sm:shadow-none disabled:opacity-60"
             >
               <CheckCircle2 className="h-5 w-5" />
-              Kirim Laporan
+              {isSubmitting ? "Mengirim Laporan..." : "Kirim Laporan"}
             </button>
           </div>
         </form>

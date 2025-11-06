@@ -1,9 +1,18 @@
 // src/app/(user)/profil/page.tsx
 "use client";
 
-import { useMemo, useState } from "react";
+// 1. Import hook yang diperlukan
+import { useMemo, useState, useEffect } from "react";
 import Link from "next/link";
-import { USERS, LAPORAN } from "@/lib/mock";
+import { useRouter } from "next/navigation"; // <-- Import router
+
+// 2. Ganti tipe mock dengan tipe Prisma
+import type {
+  Laporan as PrismaLaporan,
+  User as PrismaUser
+} from "@/generated/prisma"; // <-- Path yang benar
+
+// 3. Import UI (pastikan semua ada)
 import {
   Card,
   CardContent,
@@ -25,7 +34,8 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
-const CURRENT_USER_ID = "p2";
+// 4. Hapus mock
+// const CURRENT_USER_ID = "p2"; 
 
 function getInitials(name?: string) {
   if (!name) return "?";
@@ -38,72 +48,173 @@ function getInitials(name?: string) {
 }
 
 export default function UserProfilPage() {
-  const me0 = useMemo(() => USERS.find((p) => p.id === CURRENT_USER_ID), []);
-  const [me, setMe] = useState(me0);
-  const myReportsToday = useMemo(() => {
-    const today = new Date();
-    const y = today.getFullYear();
-    const m = today.getMonth();
-    const d = today.getDate();
-    return (LAPORAN || []).filter(
-      (l: any) =>
-        l.pelaporUserId === CURRENT_USER_ID &&
-        (() => {
-          const t = l.performedOn
-            ? new Date(l.performedOn)
-            : new Date(l.createdAt);
-          return (
-            t.getFullYear() === y && t.getMonth() === m && t.getDate() === d
-          );
-        })()
-    ).length;
-  }, []);
+  const router = useRouter(); // <-- Inisialisasi router
 
+  // 5. Buat state untuk data real
+  const [me, setMe] = useState<PrismaUser | null>(null);
+  const [myReportsToday, setMyReportsToday] = useState(0);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  // 6. Ambil data saat halaman dimuat
+  useEffect(() => {
+    const fetchData = async () => {
+      setIsLoading(true);
+      setError(null);
+      try {
+        // Kita gunakan lagi API dashboard petugas
+        const response = await fetch('/api/petugas/dashboard');
+        if (!response.ok) {
+          throw new Error('Gagal mengambil data profil');
+        }
+        const { user, reports } = await response.json();
+
+        setMe(user); // Simpan data user
+
+        // Hitung laporan hari ini (dari kode asli Anda)
+        const today = new Date();
+        const y = today.getFullYear();
+        const m = today.getMonth();
+        const d = today.getDate();
+
+        const todayCount = (reports || []).filter(
+          (l: PrismaLaporan) => { // <-- Gunakan tipe Prisma
+            const t = l.performedOn
+              ? new Date(l.performedOn)
+              : new Date(l.createdAt);
+            return (
+              t.getFullYear() === y && t.getMonth() === m && t.getDate() === d
+            );
+          }
+        ).length;
+        setMyReportsToday(todayCount);
+
+        // Isi state dialog dengan data yang baru diambil
+        setEditNama(user.nama || "");
+        setEditTelp(user.noTelp || "");
+
+      } catch (err: any) {
+        setError(err.message);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    fetchData();
+  }, []); // '[]' = Hanya jalan sekali
+
+  // State untuk Dialog "Ubah Data Diri"
   const [editOpen, setEditOpen] = useState(false);
-  const [pwdOpen, setPwdOpen] = useState(false);
-
-  const [editNama, setEditNama] = useState(me?.nama ?? "");
-  const [editTelp, setEditTelp] = useState(me?.noTelp ?? "");
+  const [editNama, setEditNama] = useState("");
+  const [editTelp, setEditTelp] = useState("");
   const [savingProfile, setSavingProfile] = useState(false);
 
+  // State untuk Dialog "Ubah Kata Sandi"
+  const [pwdOpen, setPwdOpen] = useState(false);
   const [curPwd, setCurPwd] = useState("");
   const [newPwd, setNewPwd] = useState("");
   const [newPwd2, setNewPwd2] = useState("");
   const [savingPwd, setSavingPwd] = useState(false);
 
-  const onLogout = () => {
-    alert("Keluar (simulasi). Nanti arahkan ke halaman login.");
+  // 7. Modifikasi fungsi 'onLogout' (Keluar)
+  const onLogout = async () => {
+    if (!confirm('Apakah Anda yakin ingin keluar?')) {
+      return;
+    }
+    try {
+      await fetch('/api/auth/logout', { method: 'POST' });
+      // Arahkan ke halaman login
+      router.push('/login');
+    } catch (err) {
+      alert('Gagal logout, coba lagi.');
+    }
   };
 
+  // 8. Modifikasi fungsi 'saveProfile' (Ubah Data Diri)
   const saveProfile = async () => {
     if (!editNama.trim()) return;
     setSavingProfile(true);
     try {
-      setMe((prev: any) => ({
-        ...prev,
-        nama: editNama.trim(),
-        noTelp: editTelp.trim() || undefined,
-      }));
+      const response = await fetch('/api/profil/data', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          nama: editNama.trim(),
+          noTelp: editTelp.trim() || null,
+        }),
+      });
+
+      if (!response.ok) {
+        const err = await response.json();
+        throw new Error(err.message || 'Gagal menyimpan profil');
+      }
+
+      const updatedUser = await response.json();
+      setMe(updatedUser); // Update UI dengan data baru
       setEditOpen(false);
+
+    } catch (err: any) {
+      alert(`Error: ${err.message}`);
     } finally {
       setSavingProfile(false);
     }
   };
 
+  // 9. Modifikasi fungsi 'savePassword' (Ubah Kata Sandi)
   const savePassword = async () => {
-    if (!curPwd || !newPwd || newPwd !== newPwd2 || newPwd.length < 6) return;
+    if (!curPwd || !newPwd || newPwd !== newPwd2 || newPwd.length < 6) {
+      alert('Pastikan semua field diisi, password baru minimal 6 karakter, dan konfirmasi password cocok.');
+      return;
+    }
     setSavingPwd(true);
     try {
+      const response = await fetch('/api/profil/password', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ curPwd, newPwd }),
+      });
+
+      if (!response.ok) {
+        const err = await response.json();
+        throw new Error(err.message || 'Gagal memperbarui password');
+      }
+
+      // Sukses
       setPwdOpen(false);
       setCurPwd("");
       setNewPwd("");
       setNewPwd2("");
-      alert("Kata sandi diperbarui (simulasi).");
+      alert("Kata sandi berhasil diperbarui.");
+
+    } catch (err: any) {
+      alert(`Error: ${err.message}`); // (misal: "Password saat ini salah")
     } finally {
       setSavingPwd(false);
     }
   };
 
+  // 10. Tambahkan handler Loading & Error
+  if (isLoading) {
+    return (
+      <div className="mx-auto w-full max-w-screen-sm px-3 py-3 md:max-w-screen-md md:px-6 md:py-6 text-center">
+        <p>Mengambil data profil...</p>
+      </div>
+    );
+  }
+
+  if (error || !me) {
+    return (
+      <div className="mx-auto w-full max-w-screen-sm px-3 py-3 md:max-w-screen-md md:px-6 md:py-6 text-center text-red-600">
+        <p>Error: {error || "Gagal memuat profil"}</p>
+        <Button onClick={() => window.location.reload()} className="mt-4">
+          Muat Ulang
+        </Button>
+      </div>
+    );
+  }
+
+  // --- SEMUA JSX ANDA DI BAWAH INI (TIDAK BERUBAH) ---
+  // (Data 'me' dan 'myReportsToday' sekarang diambil dari state)
   return (
     <div className="mx-auto w-full max-w-screen-sm px-3 py-3 md:max-w-screen-md md:px-6 md:py-6">
       <div className="mb-4">
@@ -119,15 +230,15 @@ export default function UserProfilPage() {
         <CardHeader className="flex flex-row items-center gap-3 space-y-0">
           <Avatar className="size-12 rounded-2xl">
             <AvatarFallback className="rounded-2xl bg-primary/10 text-primary">
-              {getInitials(me?.nama)}
+              {getInitials(me.nama)}
             </AvatarFallback>
           </Avatar>
           <div>
             <CardTitle className="text-base leading-tight">
-              {me?.nama ?? "Petugas"}
+              {me.nama ?? "Petugas"}
             </CardTitle>
             <CardDescription className="text-xs">
-              ID: {me?.petugasId ?? "-"}
+              ID: {me.petugasId ?? "-"}
             </CardDescription>
           </div>
         </CardHeader>
@@ -148,15 +259,15 @@ export default function UserProfilPage() {
             <div className="flex items-center justify-between md:block">
               <span className="text-sm text-muted-foreground">Status</span>
               <div className="md:mt-1.5">
-                <Badge variant={me?.aktif ? "default" : "secondary"}>
-                  {me?.aktif ? "Aktif" : "Nonaktif"}
+                <Badge variant={me.aktif ? "default" : "secondary"}>
+                  {me.aktif ? "Aktif" : "Nonaktif"}
                 </Badge>
               </div>
             </div>
             <div className="flex items-center justify-between md:block">
               <span className="text-sm text-muted-foreground">No. Telepon</span>
               <div className="md:mt-1.5 text-sm font-medium">
-                {me?.noTelp ?? "-"}
+                {me.noTelp ?? "-"}
               </div>
             </div>
             <div className="flex items-center justify-between md:block">
@@ -198,6 +309,7 @@ export default function UserProfilPage() {
         kapan saja.
       </p>
 
+      {/* Dialog Ubah Data Diri */}
       <Dialog open={editOpen} onOpenChange={setEditOpen}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
@@ -230,12 +342,13 @@ export default function UserProfilPage() {
               disabled={savingProfile || !editNama.trim()}
               className="rounded-xl"
             >
-              Simpan
+              {savingProfile ? "Menyimpan..." : "Simpan"}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
+      {/* Dialog Ubah Kata Sandi */}
       <Dialog open={pwdOpen} onOpenChange={setPwdOpen}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
@@ -285,7 +398,7 @@ export default function UserProfilPage() {
               }
               className="rounded-xl"
             >
-              Perbarui
+              {savingPwd ? "Memperbarui..." : "Perbarui"}
             </Button>
           </DialogFooter>
         </DialogContent>

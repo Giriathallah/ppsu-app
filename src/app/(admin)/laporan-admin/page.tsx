@@ -517,7 +517,7 @@ export default function AdminLaporan() {
                         )}
                       </TableCell>
                       <TableCell className="space-x-2">
-                        <Link href={`/admin/laporan/${l.id}`}>
+                        <Link href={`/laporan-admin/${l.id}`}>
                           <Button variant="outline" className="rounded-xl">
                             Detail
                           </Button>
